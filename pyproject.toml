@@ -47,6 +47,7 @@ pymdown-extensions = "*"
 pytest = "*"
 pytest-github-actions-annotate-failures = "*"
 pytest-cov = "*"
+pytest-randomly = "*"
 python-kacl = "*"
 ruff = ">=0.2.0"
 

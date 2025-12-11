@@ -153,7 +153,10 @@ class DurationBasedChunksAlgorithm(AlgorithmBase):
         durations: "Dict[str, float]",
         weights: "Optional[List[float]]" = None,
     ) -> "List[TestGroup]":
-        items_with_durations = _get_items_with_durations(items, durations)
+        # Sort items by nodeid for deterministic splitting regardless of collection order
+        # This ensures consistent group assignment even when pytest-randomly shuffles tests
+        sorted_items = sorted(items, key=lambda item: item.nodeid)
+        items_with_durations = _get_items_with_durations(sorted_items, durations)
         total_duration = sum(map(itemgetter(1), items_with_durations))
 
         # Default to equal weights if not provided
