@@ -261,14 +261,24 @@ class PytestSplitCachePlugin(Base):
                         test_durations[test_report.nodeid] = 0
                     test_durations[test_report.nodeid] += test_report.duration
 
-        if self.config.option.clean_durations:
-            self.cached_durations = dict(test_durations)
+        # When splitting is enabled, only store durations for tests that actually ran
+        # This prevents stale cached durations from overwriting fresh data when
+        # multiple groups merge their results
+        splits = self.config.option.splits
+        if splits and not self.config.option.clean_durations:
+            # Only write durations for tests that ran in this session
+            # Don't include cached durations from other groups
+            output_durations = dict(test_durations)
+        elif self.config.option.clean_durations:
+            output_durations = dict(test_durations)
         else:
+            # Default behavior: merge new durations into cache
+            output_durations = dict(self.cached_durations)
             for k, v in test_durations.items():
-                self.cached_durations[k] = v
+                output_durations[k] = v
 
         with open(self.config.option.durations_path, "w") as f:
-            json.dump(self.cached_durations, f, sort_keys=True, indent=4)
+            json.dump(output_durations, f, sort_keys=True, indent=4)
 
         message = self.writer.markup(
             f"\n\n[pytest-split] Stored test durations in {self.config.option.durations_path}"

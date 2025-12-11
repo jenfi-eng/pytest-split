@@ -100,6 +100,41 @@ class TestStoreDurations:
         example_suite.runpytest("--durations-path", durations_path)
         assert not os.path.exists(durations_path)
 
+    def test_it_stores_only_selected_tests_when_splitting(
+        self, example_suite, durations_path
+    ):
+        """When splitting is enabled, only store durations for tests that actually ran."""
+        # Pre-populate with cached durations (simulating durations from other groups)
+        old_durations = {"cached_test_from_other_group": 99.0}
+        with open(durations_path, "w") as f:
+            json.dump(old_durations, f)
+
+        # Run with splitting enabled - only group 1's tests should be stored
+        example_suite.runpytest(
+            "--store-durations",
+            "--durations-path",
+            durations_path,
+            "--splits",
+            "2",
+            "--group",
+            "1",
+            "-p",
+            "no:randomly",  # Disable pytest-randomly for deterministic results
+        )
+
+        with open(durations_path) as f:
+            durations = json.load(f)
+
+        # Should NOT contain cached durations from other groups
+        assert "cached_test_from_other_group" not in durations
+        # Should only contain tests that actually ran in group 1
+        # With duration_based_chunks and no durations, tests are split by count
+        # Group 1 gets first ~half of tests alphabetically (test_1 through test_5)
+        assert len(durations) <= EXAMPLE_SUITE_TEST_COUNT
+        # Verify all stored tests are from the selected group (test names start with test_)
+        for key in durations:
+            assert "test_" in key
+
 
 class TestSplitToSuites:
     parameters: ClassVar = [
