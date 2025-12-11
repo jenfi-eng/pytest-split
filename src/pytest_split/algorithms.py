@@ -5,7 +5,7 @@ from operator import itemgetter
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
-    from typing import Dict, List, Tuple
+    from typing import Dict, List, Optional, Tuple
 
     from _pytest import nodes
 
@@ -21,7 +21,11 @@ class AlgorithmBase(ABC):
 
     @abstractmethod
     def __call__(
-        self, splits: int, items: "List[nodes.Item]", durations: "Dict[str, float]"
+        self,
+        splits: int,
+        items: "List[nodes.Item]",
+        durations: "Dict[str, float]",
+        weights: "Optional[List[float]]" = None,
     ) -> "List[TestGroup]":
         pass
 
@@ -44,17 +48,30 @@ class LeastDurationAlgorithm(AlgorithmBase):
     maintaining the original order of items. It is therefore important that the order of items be identical on all nodes
     that use this plugin. Due to issue #25 this might not always be the case.
 
+    When weights are provided, groups with higher weights will receive proportionally more
+    tests. For example, with weights [2, 1], group 1 will get approximately twice the
+    test duration as group 2.
+
     :param splits: How many groups we're splitting in.
     :param items: Test items passed down by Pytest.
     :param durations: Our cached test runtimes. Assumes contains timings only of relevant tests
+    :param weights: Optional list of weights for each group. Higher weight = more tests.
     :return:
         List of groups
     """
 
     def __call__(
-        self, splits: int, items: "List[nodes.Item]", durations: "Dict[str, float]"
+        self,
+        splits: int,
+        items: "List[nodes.Item]",
+        durations: "Dict[str, float]",
+        weights: "Optional[List[float]]" = None,
     ) -> "List[TestGroup]":
         items_with_durations = _get_items_with_durations(items, durations)
+
+        # Default to equal weights if not provided
+        if weights is None:
+            weights = [1.0] * splits
 
         # add index of item in list
         items_with_durations_indexed = [
@@ -73,25 +90,28 @@ class LeastDurationAlgorithm(AlgorithmBase):
 
         selected: List[List[Tuple[nodes.Item, int]]] = [[] for _ in range(splits)]
         deselected: List[List[nodes.Item]] = [[] for _ in range(splits)]
-        duration: List[float] = [0 for _ in range(splits)]
+        duration: List[float] = [0.0 for _ in range(splits)]
 
-        # create a heap of the form (summed_durations, group_index)
-        heap: List[Tuple[float, int]] = [(0, i) for i in range(splits)]
+        # create a heap of the form (weighted_duration, group_index)
+        # We use duration/weight so groups with higher weights appear "less full"
+        heap: List[Tuple[float, int]] = [(0.0, i) for i in range(splits)]
         heapq.heapify(heap)
         for item, item_duration, original_index in sorted_items_with_durations:
-            # get group with smallest sum
-            summed_durations, group_idx = heapq.heappop(heap)
-            new_group_durations = summed_durations + item_duration
+            # get group with smallest weighted sum
+            _, group_idx = heapq.heappop(heap)
+            new_group_duration = duration[group_idx] + item_duration
 
             # store assignment
             selected[group_idx].append((item, original_index))
-            duration[group_idx] = new_group_durations
+            duration[group_idx] = new_group_duration
             for i in range(splits):
                 if i != group_idx:
                     deselected[i].append(item)
 
-            # store new duration - in case of ties it sorts by the group_idx
-            heapq.heappush(heap, (new_group_durations, group_idx))
+            # store new weighted duration - divide by weight so higher weight = more capacity
+            # in case of ties it sorts by the group_idx
+            weighted_duration = new_group_duration / weights[group_idx]
+            heapq.heappush(heap, (weighted_duration, group_idx))
 
         groups = []
         for i in range(splits):
@@ -115,25 +135,47 @@ class DurationBasedChunksAlgorithm(AlgorithmBase):
     The original list of test items is split into groups by finding boundary indices i_0, i_1, i_2
     and creating group_1 = items[0:i_0], group_2 = items[i_0, i_1], group_3 = items[i_1, i_2], ...
 
+    When weights are provided, groups with higher weights will receive proportionally more
+    tests. For example, with weights [2, 1], group 1 will get approximately twice the
+    test duration as group 2.
+
     :param splits: How many groups we're splitting in.
     :param items: Test items passed down by Pytest.
     :param durations: Our cached test runtimes. Assumes contains timings only of relevant tests
+    :param weights: Optional list of weights for each group. Higher weight = more tests.
     :return: List of TestGroup
     """
 
     def __call__(
-        self, splits: int, items: "List[nodes.Item]", durations: "Dict[str, float]"
+        self,
+        splits: int,
+        items: "List[nodes.Item]",
+        durations: "Dict[str, float]",
+        weights: "Optional[List[float]]" = None,
     ) -> "List[TestGroup]":
         items_with_durations = _get_items_with_durations(items, durations)
-        time_per_group = sum(map(itemgetter(1), items_with_durations)) / splits
+        total_duration = sum(map(itemgetter(1), items_with_durations))
+
+        # Default to equal weights if not provided
+        if weights is None:
+            weights = [1.0] * splits
+
+        # Calculate target time for each group based on weights
+        total_weight = sum(weights)
+        target_times = [(w / total_weight) * total_duration for w in weights]
 
         selected: List[List[nodes.Item]] = [[] for i in range(splits)]
         deselected: List[List[nodes.Item]] = [[] for i in range(splits)]
-        duration: List[float] = [0 for i in range(splits)]
+        duration: List[float] = [0.0 for i in range(splits)]
 
         group_idx = 0
         for item, item_duration in items_with_durations:
-            if duration[group_idx] >= time_per_group:
+            # Move to next group if current group has reached its target
+            # (but don't exceed the last group)
+            if (
+                group_idx < splits - 1
+                and duration[group_idx] >= target_times[group_idx]
+            ):
                 group_idx += 1
 
             selected[group_idx].append(item)

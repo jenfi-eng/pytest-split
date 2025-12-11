@@ -184,3 +184,112 @@ class TestAbstractAlgorithm:
         algo = MyAlgorithm()
         other = "not an algorithm"
         assert algo.__eq__(other) is NotImplemented
+
+
+class TestWeights:
+    """Tests for group weights functionality."""
+
+    @pytest.mark.parametrize("algo_name", Algorithms.names())
+    def test__weights_none_equals_equal_weights(self, algo_name):
+        """Passing weights=None should behave the same as equal weights."""
+        durations = {"a": 1, "b": 1, "c": 1}
+        items = [item(x) for x in durations]
+        algo = Algorithms[algo_name].value
+
+        groups_no_weights = algo(splits=3, items=items, durations=durations)
+        groups_equal_weights = algo(
+            splits=3, items=items, durations=durations, weights=[1, 1, 1]
+        )
+
+        for g1, g2 in zip(groups_no_weights, groups_equal_weights):
+            assert g1.selected == g2.selected
+            assert g1.duration == g2.duration
+
+    @pytest.mark.parametrize("algo_name", Algorithms.names())
+    def test__weighted_split_assigns_more_to_higher_weight(self, algo_name):
+        """Groups with higher weights should get more test duration."""
+        durations = {"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1}
+        items = [item(x) for x in durations]
+        algo = Algorithms[algo_name].value
+
+        # Weight 2 for group 1, weight 1 for group 2
+        # Group 1 should get ~2/3 of tests, Group 2 should get ~1/3
+        groups = algo(splits=2, items=items, durations=durations, weights=[2.0, 1.0])
+
+        # Group 1 should have more duration than group 2
+        assert groups[0].duration >= groups[1].duration
+        # With 6 equal tests and 2:1 weights, group 1 should get 4, group 2 should get 2
+        assert len(groups[0].selected) == 4
+        assert len(groups[1].selected) == 2
+
+    def test__least_duration_weighted_split_with_unequal_durations(self):
+        """Test least_duration algorithm with weights and varying durations."""
+        # Total duration = 12, with weights [2, 1], group 1 should get ~8, group 2 ~4
+        durations = {"a": 4, "b": 3, "c": 2, "d": 2, "e": 1}
+        items = [item(x) for x in durations]
+        algo = Algorithms["least_duration"].value
+
+        groups = algo(splits=2, items=items, durations=durations, weights=[2.0, 1.0])
+
+        # Check that group 1 has approximately twice the duration of group 2
+        ratio = (
+            groups[0].duration / groups[1].duration
+            if groups[1].duration > 0
+            else float("inf")
+        )
+        assert (
+            1.5 <= ratio <= 2.5
+        )  # Allow some flexibility due to discrete test assignment
+
+    def test__duration_based_chunks_weighted_split(self):
+        """Test duration_based_chunks algorithm respects weights."""
+        durations = {"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1}
+        items = [item(x) for x in durations]
+        algo = Algorithms["duration_based_chunks"].value
+
+        # 3:1 weights - group 1 gets 75%, group 2 gets 25%
+        groups = algo(splits=2, items=items, durations=durations, weights=[3.0, 1.0])
+
+        # With 6 tests at 1 sec each, group 1 should get ~4.5 sec worth
+        # This means tests a, b, c, d (4 tests), and group 2 gets e, f (2 tests)
+        assert len(groups[0].selected) >= 4
+        assert len(groups[1].selected) <= 2
+
+    @pytest.mark.parametrize("algo_name", Algorithms.names())
+    def test__weighted_split_is_deterministic(self, algo_name):
+        """Weighted splits should be deterministic - same inputs, same outputs."""
+        durations = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+        items = [item(x) for x in durations]
+        algo = Algorithms[algo_name].value
+        weights = [2.0, 1.0, 1.0]
+
+        # Run multiple times
+        results = [
+            algo(splits=3, items=items, durations=durations, weights=weights)
+            for _ in range(5)
+        ]
+
+        # All results should be identical
+        for i in range(1, len(results)):
+            for j in range(3):
+                assert results[0][j].selected == results[i][j].selected
+                assert results[0][j].duration == results[i][j].duration
+
+    @pytest.mark.parametrize("algo_name", Algorithms.names())
+    def test__three_groups_with_weights(self, algo_name):
+        """Test three groups with different weights."""
+        # 9 tests, weights 3:2:1 -> group 1 gets 50%, group 2 gets 33%, group 3 gets 17%
+        durations = {chr(ord("a") + i): 1 for i in range(9)}
+        items = [item(x) for x in sorted(durations.keys())]
+        algo = Algorithms[algo_name].value
+
+        groups = algo(
+            splits=3, items=items, durations=durations, weights=[3.0, 2.0, 1.0]
+        )
+
+        total_selected = sum(len(g.selected) for g in groups)
+        assert total_selected == 9
+
+        # Check rough proportions
+        assert len(groups[0].selected) >= len(groups[1].selected)
+        assert len(groups[1].selected) >= len(groups[2].selected)

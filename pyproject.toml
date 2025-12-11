@@ -37,7 +37,7 @@ python = ">=3.8.1, <4.0"
 pytest = "^5 | ^6 | ^7 | ^8"
 
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 importlib-metadata = "==4.11.*"
 mkdocstrings = {version = ">=0.18", extras = ["python"]}
 mkdocs-material = "*"
@@ -59,10 +59,6 @@ slowest-tests = "pytest_split.cli:list_slowest_tests"
 
 [tool.poetry.plugins.pytest11]
 pytest-split = "pytest_split.plugin"
-
-[tool.black]
-target-version = ["py37", "py38", "py39"]
-include = '\.pyi?$'
 
 [tool.pytest.ini_options]
 addopts = """\
@@ -103,24 +99,26 @@ target-version = "py38" # The lowest supported version
 select = ["ALL"]
 ignore = [
     "ANN",      # Type hints related, let mypy handle these.
-    "COM812",   # "Trailing comma missing". If black is happy, I'm happy.
+    "COM812",   # "Trailing comma missing". If ruff format is happy, I'm happy.
     "D",        # Docstrings related
-    "E501",     # "Line too long". If black is happy, I'm happy.
+    "E501",     # "Line too long". If ruff format is happy, I'm happy.
     "EM101",    # "Exception must not use a string literal, assign to variable first"
     "EM102",    # "Exception must not use an f-string literal, assign to variable first"
+    "ISC001",   # "Implicitly concatenated string literals on one line". Conflicts with ruff format.
     "PTH",      # User Pathlib stuff over os.*. Should migrate to Pathlib at some point.
     "RET504",   # "Unnecessary variable assignment before `return` statement"
     "S101",     # "Use of `assert` detected"
     "SIM108",   # "Use ternary operator ...". Ternary is harmful for readability in some cases.
     "TRY003",   # "Avoid specifying long messages outside the exception class"
-    "FA100", 	# "Missing `from __future__ import annotations` ..." pytest-split supports a range of Python versions
-    ]
+    "FA100",    # "Missing `from __future__ import annotations` ..." pytest-split supports a range of Python versions
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "S101",     # "Use of `assert` detected"
     "ARG",      # "Unused function argument". Fixtures are often unused.
     "S105",     # "Possible hardcoded password".
+    "PLR2004",  # "Magic value used in comparison". Tests often use magic numbers.
 ]
 
 [tool.ruff.lint.mccabe]

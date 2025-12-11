@@ -18,6 +18,23 @@ if TYPE_CHECKING:
     from _pytest.main import ExitCode  # type: ignore[attr-defined]
 
 
+def _parse_group_weights(value: str) -> "List[float]":
+    """Parse comma-separated group weights string into list of floats."""
+    parts = value.split(",")
+    weights = []
+    for part in parts:
+        try:
+            w = float(part.strip())
+        except ValueError as e:
+            msg = f"Invalid group weights format: could not convert '{part.strip()}' to float"
+            raise ValueError(msg) from e
+        if w <= 0:
+            msg = "All weights must be positive numbers"
+            raise ValueError(msg)
+        weights.append(w)
+    return weights
+
+
 # Ugly hack for freezegun compatibility: https://github.com/spulec/freezegun/issues/286
 STORE_DURATIONS_SETUP_AND_TEARDOWN_THRESHOLD = 60 * 10  # seconds
 
@@ -74,6 +91,18 @@ def pytest_addoption(parser: "Parser") -> None:
             "while running the suite with '--store-durations'."
         ),
     )
+    group.addoption(
+        "--group-weights",
+        dest="group_weights",
+        type=str,
+        help=(
+            "Comma-separated list of weights for each group. "
+            "Higher weight = more tests. Example: '2,1,1' means group 1 gets "
+            "~50%% of tests, groups 2 and 3 get ~25%% each. "
+            "Number of weights must match --splits."
+        ),
+        default=None,
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -83,6 +112,7 @@ def pytest_cmdline_main(config: "Config") -> "Optional[Union[int, ExitCode]]":
     """
     group = config.getoption("group")
     splits = config.getoption("splits")
+    group_weights = config.getoption("group_weights")
 
     if splits is None and group is None:
         return None
@@ -98,6 +128,17 @@ def pytest_cmdline_main(config: "Config") -> "Optional[Union[int, ExitCode]]":
 
     if group < 1 or group > splits:
         raise pytest.UsageError(f"argument `--group` must be >= 1 and <= {splits}")
+
+    if group_weights is not None:
+        try:
+            weights = _parse_group_weights(group_weights)
+        except ValueError as e:
+            raise pytest.UsageError(str(e)) from e
+
+        if len(weights) != splits:
+            raise pytest.UsageError(
+                f"Number of weights ({len(weights)}) must match --splits ({splits})"
+            )
 
     return None
 
@@ -160,9 +201,15 @@ class PytestSplitPlugin(Base):
         """
         splits: int = config.option.splits
         group_idx: int = config.option.group
+        group_weights_str = config.option.group_weights
+
+        # Parse weights if provided
+        weights = None
+        if group_weights_str is not None:
+            weights = _parse_group_weights(group_weights_str)
 
         algo = algorithms.Algorithms[config.option.splitting_algorithm].value
-        groups = algo(splits, items, self.cached_durations)
+        groups = algo(splits, items, self.cached_durations, weights)
         group = groups[group_idx - 1]
 
         ensure_ipynb_compatibility(group, items)

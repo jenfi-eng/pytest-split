@@ -5,6 +5,7 @@ from typing import ClassVar
 
 import pytest
 from _pytest.main import ExitCode  # type: ignore[attr-defined]
+
 from pytest_split.algorithms import Algorithms
 
 pytest_plugins = ["pytester"]
@@ -12,7 +13,7 @@ pytest_plugins = ["pytester"]
 EXAMPLE_SUITE_TEST_COUNT = 10
 
 
-@pytest.fixture()
+@pytest.fixture
 def example_suite(testdir):
     testdir.makepyfile(
         "".join(
@@ -23,7 +24,7 @@ def example_suite(testdir):
     return testdir
 
 
-@pytest.fixture()
+@pytest.fixture
 def durations_path(tmpdir):
     return str(tmpdir.join(".durations"))
 
@@ -311,6 +312,157 @@ class TestSplitToSuites:
             assert _passed_test_names(result) == expected_tests
 
 
+class TestGroupWeights:
+    """Tests for --group-weights functionality."""
+
+    def test_weighted_split_assigns_proportionally(self, example_suite, durations_path):
+        """Test that weights affect test distribution."""
+        # Create durations where each test takes 1 second
+        test_path = "test_weighted_split_assigns_proportionally0/test_weighted_split_assigns_proportionally.py"
+        durations = {
+            f"{test_path}::test_{num}": 1
+            for num in range(1, EXAMPLE_SUITE_TEST_COUNT + 1)
+        }
+        with open(durations_path, "w") as f:
+            json.dump(durations, f)
+
+        # With weights 2,1 and 10 tests of equal duration:
+        # Group 1 should get ~6-7 tests, Group 2 should get ~3-4 tests
+        result1 = example_suite.inline_run(
+            "--splits",
+            "2",
+            "--group",
+            "1",
+            "--durations-path",
+            durations_path,
+            "--group-weights",
+            "2,1",
+        )
+        result2 = example_suite.inline_run(
+            "--splits",
+            "2",
+            "--group",
+            "2",
+            "--durations-path",
+            durations_path,
+            "--group-weights",
+            "2,1",
+        )
+
+        passed1 = len(_passed_test_names(result1))
+        passed2 = len(_passed_test_names(result2))
+
+        # Group 1 should have more tests than group 2
+        assert passed1 > passed2
+        # Total should be all tests
+        assert passed1 + passed2 == EXAMPLE_SUITE_TEST_COUNT
+
+    def test_weighted_split_with_least_duration_algorithm(
+        self, example_suite, durations_path
+    ):
+        """Test weights work with least_duration algorithm."""
+        test_path = "test_weighted_split_with_least_duration_algorithm0/test_weighted_split_with_least_duration_algorithm.py"
+        durations = {
+            f"{test_path}::test_{num}": 1
+            for num in range(1, EXAMPLE_SUITE_TEST_COUNT + 1)
+        }
+        with open(durations_path, "w") as f:
+            json.dump(durations, f)
+
+        result1 = example_suite.inline_run(
+            "--splits",
+            "2",
+            "--group",
+            "1",
+            "--durations-path",
+            durations_path,
+            "--group-weights",
+            "3,1",
+            "--splitting-algorithm",
+            "least_duration",
+        )
+        result2 = example_suite.inline_run(
+            "--splits",
+            "2",
+            "--group",
+            "2",
+            "--durations-path",
+            durations_path,
+            "--group-weights",
+            "3,1",
+            "--splitting-algorithm",
+            "least_duration",
+        )
+
+        passed1 = len(_passed_test_names(result1))
+        passed2 = len(_passed_test_names(result2))
+
+        # With 3:1 weights, group 1 should get ~7-8 tests, group 2 ~2-3
+        assert passed1 >= 7
+        assert passed2 <= 3
+        assert passed1 + passed2 == EXAMPLE_SUITE_TEST_COUNT
+
+    def test_weighted_split_is_deterministic(self, example_suite, durations_path):
+        """Running weighted split multiple times should give same results."""
+        test_path = "test_weighted_split_is_deterministic0/test_weighted_split_is_deterministic.py"
+        durations = {
+            f"{test_path}::test_{num}": num
+            for num in range(1, EXAMPLE_SUITE_TEST_COUNT + 1)
+        }
+        with open(durations_path, "w") as f:
+            json.dump(durations, f)
+
+        results = []
+        for _ in range(3):
+            result = example_suite.inline_run(
+                "--splits",
+                "3",
+                "--group",
+                "1",
+                "--durations-path",
+                durations_path,
+                "--group-weights",
+                "2,1,1",
+            )
+            results.append(_passed_test_names(result))
+
+        # All runs should produce the same result
+        assert results[0] == results[1] == results[2]
+
+    def test_equal_weights_same_as_no_weights(self, example_suite, durations_path):
+        """Equal weights should produce same result as no weights."""
+        test_path = "test_equal_weights_same_as_no_weights0/test_equal_weights_same_as_no_weights.py"
+        durations = {
+            f"{test_path}::test_{num}": 1
+            for num in range(1, EXAMPLE_SUITE_TEST_COUNT + 1)
+        }
+        with open(durations_path, "w") as f:
+            json.dump(durations, f)
+
+        result_no_weights = example_suite.inline_run(
+            "--splits",
+            "2",
+            "--group",
+            "1",
+            "--durations-path",
+            durations_path,
+        )
+        result_equal_weights = example_suite.inline_run(
+            "--splits",
+            "2",
+            "--group",
+            "1",
+            "--durations-path",
+            durations_path,
+            "--group-weights",
+            "1,1",
+        )
+
+        assert _passed_test_names(result_no_weights) == _passed_test_names(
+            result_equal_weights
+        )
+
+
 class TestRaisesUsageErrors:
     def test_returns_nonzero_when_group_but_not_splits(self, example_suite, capsys):
         result = example_suite.inline_run("--group", "1")
@@ -359,6 +511,42 @@ class TestRaisesUsageErrors:
             *Algorithms.names(),
         ]:
             assert err_content in outerr.err
+
+    def test_returns_nonzero_when_weights_count_mismatch(self, example_suite, capsys):
+        result = example_suite.inline_run(
+            "--splits", "3", "--group", "1", "--group-weights", "1,2"
+        )
+        assert result.ret == ExitCode.USAGE_ERROR
+
+        outerr = capsys.readouterr()
+        assert "Number of weights (2) must match --splits (3)" in outerr.err
+
+    def test_returns_nonzero_when_weights_invalid_format(self, example_suite, capsys):
+        result = example_suite.inline_run(
+            "--splits", "2", "--group", "1", "--group-weights", "1,abc"
+        )
+        assert result.ret == ExitCode.USAGE_ERROR
+
+        outerr = capsys.readouterr()
+        assert "Invalid group weights format" in outerr.err
+
+    def test_returns_nonzero_when_weights_negative(self, example_suite, capsys):
+        result = example_suite.inline_run(
+            "--splits", "2", "--group", "1", "--group-weights", "1,-1"
+        )
+        assert result.ret == ExitCode.USAGE_ERROR
+
+        outerr = capsys.readouterr()
+        assert "All weights must be positive" in outerr.err
+
+    def test_returns_nonzero_when_weights_zero(self, example_suite, capsys):
+        result = example_suite.inline_run(
+            "--splits", "2", "--group", "1", "--group-weights", "1,0"
+        )
+        assert result.ret == ExitCode.USAGE_ERROR
+
+        outerr = capsys.readouterr()
+        assert "All weights must be positive" in outerr.err
 
 
 class TestHasExpectedOutput:

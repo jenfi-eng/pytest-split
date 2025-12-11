@@ -1,6 +1,7 @@
 from collections import namedtuple
 
 import pytest
+
 from pytest_split.algorithms import Algorithms
 from pytest_split.ipynb_compatibility import ensure_ipynb_compatibility
 
